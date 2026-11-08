@@ -723,11 +723,131 @@ $ git grep <contraseña-del-backend>
 
 ### Evidencias
 
-_Pendiente._
+**1. Análisis estático** (desde `infra/`; no se usó tflint porque no está instalado)
+
+```text
+$ terraform fmt -check -recursive
+$ echo $?
+0
+$ terraform validate
+Success! The configuration is valid.
+```
+
+**2. Pruebas del módulo con `terraform test`**
+
+TODO 1 resuelto: run `nombre_coincide_con_variable` (`command = plan`, `output.nombre == var.nombre`).
+
+```text
+$ cd modules/sitio_web
+$ terraform init
+Terraform has been successfully initialized!
+$ terraform test
+tests\sitio_web.tftest.hcl... in progress
+  run "url_coherente_con_puerto"... pass
+  run "rechaza_puerto_fuera_de_rango"... pass
+  run "despliegue_real"... pass
+  run "nombre_coincide_con_variable"... pass
+tests\sitio_web.tftest.hcl... tearing down
+tests\sitio_web.tftest.hcl... pass
+
+Success! 4 passed, 0 failed.
+```
+
+Observador en otra terminal (`docker ps --filter name=prueba-g3` mientras corrían las pruebas):
+
+```text
+prueba-g3   Up Less than a second   0.0.0.0:8999->80/tcp
+prueba-g3   Up 1 second             0.0.0.0:8999->80/tcp
+```
+
+Al terminar, `docker ps -a --filter name=prueba-g3` ya no muestra nada.
+
+**3. Escaneo de seguridad** con checkov 3.4.3 sobre `seguridad/bucket.tf`
+
+Primer escaneo (los cuatro valores en `false`):
+
+```text
+$ checkov -d seguridad --compact --quiet
+Passed checks: 4, Failed checks: 11, Skipped checks: 0
+Check: CKV_AWS_53: "Ensure S3 bucket has block public ACLS enabled"
+Check: CKV_AWS_54: "Ensure S3 bucket has block public policy enabled"
+Check: CKV_AWS_55: "Ensure S3 bucket has ignore public ACLs enabled"
+Check: CKV_AWS_56: "Ensure S3 bucket has 'restrict_public_buckets' enabled"
+Check: CKV2_AWS_62: "Ensure S3 buckets should have event notifications enabled"
+Check: CKV2_AWS_61: "Ensure that an S3 bucket has a lifecycle configuration"
+Check: CKV_AWS_18: "Ensure the S3 bucket has access logging enabled"
+Check: CKV_AWS_144: "Ensure that S3 bucket has cross-region replication enabled"
+Check: CKV_AWS_21: "Ensure all data stored in the S3 bucket have versioning enabled"
+Check: CKV_AWS_145: "Ensure that S3 buckets are encrypted with KMS by default"
+Check: CKV2_AWS_6: "Ensure that S3 bucket has a Public Access block"
+```
+
+Segundo escaneo (los cuatro valores corregidos a `true`):
+
+```text
+$ checkov -d seguridad --compact --quiet
+Passed checks: 9, Failed checks: 6, Skipped checks: 0
+Check: CKV2_AWS_62: "Ensure S3 buckets should have event notifications enabled"
+Check: CKV_AWS_144: "Ensure that S3 bucket has cross-region replication enabled"
+Check: CKV2_AWS_61: "Ensure that an S3 bucket has a lifecycle configuration"
+Check: CKV_AWS_18: "Ensure the S3 bucket has access logging enabled"
+Check: CKV_AWS_21: "Ensure all data stored in the S3 bucket have versioning enabled"
+Check: CKV_AWS_145: "Ensure that S3 buckets are encrypted with KMS by default"
+```
+
+**4. Mini pipeline `validar.sh`**
+
+TODO 2: `terraform -chdir=infra/modules/sitio_web test`. TODO 3: `checkov -d seguridad --check CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56`.
+
+```text
+$ bash validar.sh
+Success! The configuration is valid.
+  run "url_coherente_con_puerto"... pass
+  run "rechaza_puerto_fuera_de_rango"... pass
+  run "despliegue_real"... pass
+  run "nombre_coincide_con_variable"... pass
+Success! 4 passed, 0 failed.
+terraform scan results:
+Passed checks: 4, Failed checks: 0, Skipped checks: 0
+Check: CKV_AWS_53 ... PASSED
+Check: CKV_AWS_54 ... PASSED
+Check: CKV_AWS_55 ... PASSED
+Check: CKV_AWS_56 ... PASSED
+Validación completa: el cambio puede pasar a revisión
+```
+
+Prueba 1: se desordenó a propósito la indentación de `infra/outputs.tf`.
+
+```text
+$ bash validar.sh
+outputs.tf
+$ echo $?
+3
+```
+
+Se detuvo en el **primer paso** (`fmt -check`), que lista el archivo mal formateado. Se restauró el archivo.
+
+Prueba 2: se volvió a poner `block_public_acls = false`.
+
+```text
+$ bash validar.sh
+Success! The configuration is valid.
+Success! 4 passed, 0 failed.
+Passed checks: 3, Failed checks: 1, Skipped checks: 0
+	FAILED for resource: aws_s3_bucket_public_access_block.evidencias
+$ echo $?
+1
+```
+
+Se detuvo en el **último paso** (checkov, CKV_AWS_53) y no imprimió el mensaje final. Se devolvió el valor a `true`.
 
 ### Respuestas
 
-_Pendiente._
+1. **Qué encontró cada nivel.** El *estático* (`fmt`/`validate`) encontró problemas de forma y sintaxis sin ejecutar nada (la indentación desordenada). Las *pruebas* verificaron el comportamiento: que la URL corresponde al puerto, que se rechaza el 9500 y que el contenedor realmente se crea con el nombre esperado; eso no lo ve ni el formato ni el escáner. El *escaneo de seguridad* encontró configuraciones inseguras válidas en sintaxis (el bucket público), que ni `validate` ni las pruebas consideran errores.
+2. **`docker ps` durante `despliegue_real`.** Apareció el contenedor `prueba-g3` en el puerto 8999 durante un par de segundos y luego desapareció solo. Vale la pena porque se prueba el despliegue de verdad sin tocar dev, staging ni prod, y el entorno se limpia automáticamente al terminar.
+3. **Controles del bucket.** Fallaron 11: CKV_AWS_53, 54, 55, 56, CKV2_AWS_6, CKV2_AWS_61, CKV2_AWS_62, CKV_AWS_18, CKV_AWS_21, CKV_AWS_144 y CKV_AWS_145. Después de corregir quedaron 6 (eventos, replicación, ciclo de vida, logs de acceso, versionado y cifrado KMS). Los que corresponden a «sin buckets públicos» son CKV_AWS_53 a CKV_AWS_56 (bloquear ACL y políticas públicas, ignorar ACL públicas y restringir buckets públicos).
+4. **Detectar antes del `apply`.** Corregir una línea de código es barato y no expone nada; en la nube el bucket ya estaría público y los datos podrían haberse filtrado antes de notarlo, además de costar dinero y trabajo revertirlo.
+5. **Lugar en el pipeline.** `validar.sh` es el paso **2 · Validar** (después del commit). Luego viene el paso humano **3 · Revisar**: alguien lee y aprueba el plan propuesto antes de que se ejecute el `apply`.
 
 ---
 
