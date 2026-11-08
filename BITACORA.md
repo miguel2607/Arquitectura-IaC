@@ -208,11 +208,87 @@ web-g3    6769dc3a703c   0.0.0.0:8080->80/tcp   Up 2 seconds
 
 ### Evidencias
 
-_Pendiente._
+Aplicar otra vez sin cambiar nada:
+
+```text
+$ terraform apply
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.
+
+Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+```
+
+```text
+$ terraform state list
+docker_container.web
+docker_image.nginx
+
+$ terraform state show docker_container.web   (extracto)
+resource "docker_container" "web" {
+    hostname     = "63092cf48625"
+    id           = "63092cf48625e80b3fd99ccdd0d1f1ccda4f5196ca3e2a294c9875184d1ee7dd"
+    image        = "sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea"
+    ipc_mode     = "private"
+    log_driver   = "json-file"
+    must_run     = true
+    name         = "web-g3"
+    network_data = [{ gateway = "172.17.0.1", ip_address = "172.17.0.2", network_name = "bridge", ... }]
+    runtime      = "runc"
+    shm_size     = 64
+    ...
+}
+```
+
+Lectura de `terraform.tfstate` (solo lectura):
+
+```text
+"version": 4,
+"terraform_version": "1.17.1",
+"serial": 4,
+"lineage": "22497c04-f843-f199-04fc-e4b617aaeeb6",
+"resources": [ docker_container.web, docker_image.nginx ]
+```
+
+Cambio de `nginx:1.27-alpine` a `nginx:1.28-alpine`:
+
+```text
+$ terraform plan
+  # docker_container.web must be replaced
+-/+ resource "docker_container" "web" {
+      ~ image = "sha256:6769dc3a703c..." -> (known after apply) # forces replacement
+  # docker_image.nginx must be replaced
+-/+ resource "docker_image" "nginx" {
+      ~ name  = "nginx:1.27-alpine" -> "nginx:1.28-alpine" # forces replacement
+Plan: 2 to add, 0 to change, 2 to destroy.
+```
+
+Revisor del plan: **«Aprobado: 2 a crear, 0 a cambiar, 2 a destruir; es un reemplazo (-/+) por cambio de imagen».**
+
+```text
+$ terraform apply
+docker_container.web: Destroying... [id=63092cf48625...]
+docker_container.web: Destruction complete after 1s
+docker_image.nginx: Destroying... [id=sha256:6769dc3a703c...nginx:1.27-alpine]
+docker_image.nginx: Destruction complete after 0s
+docker_image.nginx: Creating...
+docker_image.nginx: Creation complete after 0s [id=sha256:dc73b49f5124...nginx:1.28-alpine]
+docker_container.web: Creating...
+docker_container.web: Creation complete after 1s [id=b39051a49e64...]
+Apply complete! Resources: 2 added, 0 changed, 2 destroyed.
+
+$ terraform plan
+No changes. Your infrastructure matches the configuration.
+```
+
+`serial` después del reemplazo: **9** (antes: 4).
 
 ### Respuestas
 
-_Pendiente._
+1. **Respuesta en el paso 1.** «No changes… Apply complete! Resources: 0 added, 0 changed, 0 destroyed». Terraform comparó código, state e infraestructura real y no hizo nada. El segundo `docker run` de la Fase 1, en cambio, intentó crear otra vez y falló por conflicto de nombre: Terraform es idempotente, el comando imperativo no.
+2. **Datos del state que no escribimos.** El `id` real del contenedor, el `hostname`, la IP y la red (`network_data`), el `image` en formato sha256, el `runtime`, `shm_size`, `log_driver`, el `repo_digest` de la imagen, etc. Terraform los necesita para saber qué objeto real corresponde a cada recurso del código, detectar diferencias y poder modificar o destruir exactamente ese objeto.
+3. **¿Por qué se reemplazó?** Porque la imagen de un contenedor no se puede cambiar en sitio: el atributo marca `# forces replacement`. Terraform destruye el contenedor viejo y crea uno nuevo (`-/+`). Es la infraestructura inmutable: no se «cura» el servidor, se reemplaza completo y queda idéntico a lo descrito en el código.
+4. **Cambio de `serial`.** Pasó de 4 a 9. Es un contador que aumenta cada vez que Terraform escribe una nueva versión del state; junto con `lineage` (el identificador único de ese state) permite saber qué copia es la más reciente y evitar sobrescribir un state con uno viejo.
+5. **Riesgo de subir el state a Git.** El state guarda en texto plano todos los atributos de los recursos, incluidas contraseñas, cadenas de conexión y llaves de una base de datos. Subirlo a Git las filtra a cualquiera con acceso al repositorio y quedan para siempre en el historial; además, dos personas con copias distintas del state pueden pisarse los cambios.
 
 ---
 
