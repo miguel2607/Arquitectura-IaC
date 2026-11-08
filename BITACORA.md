@@ -74,11 +74,58 @@ Esta fase no tiene preguntas. Se creó el repositorio con `.gitignore`, la carpe
 
 ### Evidencias
 
-_Pendiente._
+```text
+$ docker run -d --name clickops-g3 -p 8090:80 nginx:1.27-alpine
+2aebb55738153df04a142868d565a7277ac33ebe7d906c0497695f25678a0e8f
+
+$ curl -s http://localhost:8090 | grep -o '<title>.*</title>'
+<title>Welcome to nginx!</title>
+```
+
+Repetir exactamente el mismo comando:
+
+```text
+$ docker run -d --name clickops-g3 -p 8090:80 nginx:1.27-alpine
+docker: Error response from daemon: Conflict. The container name "/clickops-g3" is already in use by container "2aebb55738153df04a142868d565a7277ac33ebe7d906c0497695f25678a0e8f". You have to remove (or rename) that container to be able to reuse that name.
+```
+
+Otro nombre, mismo puerto:
+
+```text
+$ docker run -d --name clickops-g3-2 -p 8090:80 nginx:1.27-alpine
+4fa3a8b558c791bfc229c1c8cb4d0e33b3f39229988af6cab94a360f9a2906b8
+docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint clickops-g3-2 (...): Bind for 0.0.0.0:8090 failed: port is already allocated
+```
+
+Docker alcanzó a crear el contenedor `clickops-g3-2` (imprimió su ID), pero no pudo arrancarlo: quedó creado y detenido.
+
+```text
+$ docker rm -f clickops-g3 clickops-g3-2
+clickops-g3
+clickops-g3-2
+
+$ docker ps -a --filter name=clickops
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+```
+
+**El mismo objetivo de dos formas**
+
+Imperativo (pasos en orden):
+
+1. Descargar la imagen `nginx:1.27-alpine`.
+2. Crear un contenedor llamado `clickops-g3` con esa imagen.
+3. Publicar el puerto 80 del contenedor en el 8090 del equipo.
+4. Arrancar el contenedor en segundo plano.
+
+Declarativo (resultado deseado):
+
+> «Quiero un contenedor `clickops-g3` con nginx 1.27 respondiendo en el puerto 8090.»
 
 ### Respuestas
 
-_Pendiente._
+1. **Error del segundo `docker run`.** `Conflict. The container name "/clickops-g3" is already in use`. Un comando imperativo no es idempotente: ejecuta la acción cada vez sin mirar si el resultado ya existe, así que repetirlo no da «lo mismo» sino un error (o, con otro nombre, un contenedor a medias que choca por el puerto). Hay que revisar a mano el estado antes de cada paso.
+2. **Servidor idéntico para otro grupo.** Tendríamos que contarles el comando exacto, la imagen y la versión, el nombre, el puerto y que el 8090 debe estar libre. Eso no quedó registrado en ningún lado: solo en la historia de la terminal de quien lo tecleó y en nuestra memoria.
+3. **Puntos de «Por qué duele» que vivimos.** Los cuatro: fue *propenso a errores* (el conflicto de nombre y el de puerto); *imposible de reproducir igual* (el segundo intento dejó un contenedor creado pero sin arrancar); *sin historial* (nada indica quién creó qué); y *el conocimiento se va con la persona* (solo el operador sabe qué comando usó).
 
 ---
 
