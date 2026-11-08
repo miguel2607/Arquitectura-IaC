@@ -133,11 +133,74 @@ Declarativo (resultado deseado):
 
 ### Evidencias
 
-_Pendiente._
+```text
+$ terraform init
+Initializing provider plugins...
+- Finding kreuzwerker/docker versions matching "~> 4.6"...
+- Installing kreuzwerker/docker v4.6.0...
+- Installed kreuzwerker/docker v4.6.0 (self-signed, key ID 0DCE698927DAF8EC)
+Terraform has created a lock file .terraform.lock.hcl to record the provider
+selections it made above.
+Terraform has been successfully initialized!
+
+$ ls -a
+.  ..  .terraform  .terraform.lock.hcl  main.tf
+
+$ terraform fmt
+$ terraform validate
+Success! The configuration is valid.
+```
+
+```text
+$ terraform plan
+  # docker_container.web will be created
+  + resource "docker_container" "web" {
+      + name  = "web-g3"
+      + ports {
+          + external = 8080
+          + internal = 80
+        }
+      ...
+    }
+
+  # docker_image.nginx will be created
+  + resource "docker_image" "nginx" {
+      + keep_locally = true
+      + name         = "nginx:1.27-alpine"
+      ...
+    }
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
+Revisor del plan: **«Aprobado: 2 a crear, 0 a cambiar, 0 a destruir».**
+
+```text
+$ terraform apply
+docker_image.nginx: Creating...
+docker_image.nginx: Creation complete after 0s [id=sha256:6769dc3a703c...nginx:1.27-alpine]
+docker_container.web: Creating...
+docker_container.web: Creation complete after 1s [id=63092cf48625...]
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+
+$ curl -s http://localhost:8080 | grep -o '<title>.*</title>'
+<title>Welcome to nginx!</title>
+
+$ terraform output
+url = "http://localhost:8080"
+
+$ docker ps --filter name=web-g3
+NAMES     IMAGE          PORTS                  STATUS
+web-g3    6769dc3a703c   0.0.0.0:8080->80/tcp   Up 2 seconds
+```
 
 ### Respuestas
 
-_Pendiente._
+1. **¿Cuántos recursos creó el plan?** Dos: `docker_image.nginx` y `docker_container.web`. En Terraform la imagen también es un recurso gestionado: el contenedor necesita que la imagen exista (y conocer su ID) antes de poder crearse.
+2. **Orden que impone `docker_image.nginx.image_id`.** La referencia crea una dependencia implícita: primero la imagen y después el contenedor, como se ve en la salida del `apply`. Es el paso 2 de «Qué ocurre cuando aplicas»: Terraform lee el código, arma el grafo de dependencias y calcula el plan; luego (paso 3) llama al provider en ese orden.
+3. **¿Qué descargó `terraform init`?** El provider `kreuzwerker/docker` v4.6.0, guardado en la carpeta oculta `.terraform/`. `.terraform.lock.hcl` fija esa versión exacta y sus hashes, para que todo el equipo use el mismo provider; por eso se versiona y `.terraform/` no.
+4. **Bloque que falta de «Cómo se escribe Terraform».** `variable`. Ya tenemos `provider`, `resource` y `output`.
+5. **¿Dónde quedó registrado ahora?** En `infra/main.tf`, versionado en Git con el commit `fase-2`. Cualquier grupo puede clonar el repositorio y obtener el mismo servidor con `terraform apply`.
 
 ---
 
