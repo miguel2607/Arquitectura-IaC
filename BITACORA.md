@@ -477,11 +477,74 @@ Plan: 1 to add, 0 to change, 1 to destroy.
 
 ### Evidencias
 
-_Pendiente._
+Módulo en `infra/modules/sitio_web/` (`versions.tf`, `variables.tf`, `main.tf`, `outputs.tf`). La validación del puerto se movió a `variables.tf` del módulo. TODO resueltos:
+
+- **TODO 1:** módulos `blog` (8082) y `docs` (8083) en `infra/main.tf`.
+- **TODO 2:** output `urls` con la url de los tres módulos.
+
+Limpieza de la raíz: se eliminaron `local.nombre`, `local.html` (y con ellos `local.etiquetas`, que ya nadie usaba, por lo que `locals.tf` quedó vacío y se borró), las variables `puerto` y `mensaje` (también de `terraform.tfvars`) y los outputs `url` y `contenedor`, que apuntaban a `docker_container.web`.
+
+```text
+$ terraform plan
+Error: Module not installed      (x3: se olvidó el init)
+
+$ terraform init
+Initializing modules...
+- docs in modules\sitio_web
+- tienda in modules\sitio_web
+- blog in modules\sitio_web
+Terraform has been successfully initialized!
+
+$ terraform plan
+  # docker_container.web will be destroyed
+  # (because docker_container.web is not in configuration)
+  # docker_image.nginx will be destroyed
+  # (because docker_image.nginx is not in configuration)
+  # module.blog.docker_container.this will be created
+  # module.blog.docker_image.this will be created
+  # module.docs.docker_container.this will be created
+  # module.docs.docker_image.this will be created
+  # module.tienda.docker_container.this will be created
+  # module.tienda.docker_image.this will be created
+Plan: 6 to add, 0 to change, 2 to destroy.
+```
+
+Revisor: **«Aprobado: 6 a crear, 0 a cambiar, 2 a destruir. Se destruyen la imagen y el contenedor `web-g3` de la raíz porque ya no están en el código, y se crean imagen + contenedor para cada uno de los tres módulos».**
+
+```text
+$ terraform apply
+Apply complete! Resources: 6 added, 0 changed, 2 destroyed.
+
+$ curl -s localhost:8081 | head -1   →  <h1>Tienda del grupo 3</h1>
+$ curl -s localhost:8082 | head -1   →  <h1>Blog del grupo 3</h1>
+$ curl -s localhost:8083 | head -1   →  <h1>Docs del grupo 3</h1>
+
+$ terraform output urls
+[
+  "http://localhost:8081",
+  "http://localhost:8082",
+  "http://localhost:8083",
+]
+```
+
+Prueba de la pregunta 2 (se quitó `versions.tf` del módulo un momento y se volvió a poner):
+
+```text
+$ terraform init
+- Finding latest version of hashicorp/docker...
+Error: Failed to query available provider packages
+hashicorp/docker: provider registry registry.terraform.io does not have a
+provider named registry.terraform.io/hashicorp/docker
+Did you intend to use kreuzwerker/docker? If so, you must specify that source
+address in each module which requires that provider.
+```
 
 ### Respuestas
 
-_Pendiente._
+1. **Línea `Plan:` del paso 8.** `Plan: 6 to add, 0 to change, 2 to destroy.` Se destruyeron `docker_container.web` y `docker_image.nginx` porque se eliminaron del código raíz; se crearon 6 recursos (una imagen y un contenedor por cada uno de los módulos `tienda`, `blog` y `docs`), porque cada llamada al módulo tiene su propia dirección en el state (`module.<nombre>.docker_*.this`).
+2. **Error sin `versions.tf`.** `Error: Failed to query available provider packages … does not have a provider named registry.terraform.io/hashicorp/docker`. Sin declarar el origen, Terraform asume `hashicorp/docker`, que no existe.
+3. **Agregar una etiqueta a todos los sitios.** Con módulo: un solo archivo (`modules/sitio_web/main.tf`), un solo bloque. Copiando y pegando: tres bloques `docker_container` (uno por sitio), con el riesgo de que alguno se quede desincronizado.
+4. **¿Qué necesitaría otro grupo para usar el módulo sin copiar la carpeta?** Que el módulo esté publicado en un lugar accesible y versionado: por ejemplo este repositorio de GitHub con una etiqueta de versión, usando `source = "git::https://github.com/miguel2607/Arquitectura-IaC.git//infra/modules/sitio_web?ref=v1.0.0"`, o un registro de módulos. Además, conocer sus variables de entrada y sus outputs.
 
 ---
 
