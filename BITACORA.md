@@ -296,11 +296,99 @@ No changes. Your infrastructure matches the configuration.
 
 ### Evidencias
 
-_Pendiente._
+**Experimento A · Apagar el servidor**
+
+```text
+$ docker stop web-g3
+web-g3
+
+$ terraform plan
+  # docker_container.web must be replaced
+      ~ must_run          = false -> true
+      + ports { # forces replacement
+          + external = 8080 # forces replacement
+          + internal = 80 # forces replacement
+        }
+Plan: 1 to add, 0 to change, 1 to destroy.
+```
+
+Revisor: **«Aprobado: 1 a crear, 0 a cambiar, 1 a destruir (reemplazo del contenedor detenido)».**
+
+```text
+$ terraform apply
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+$ curl -s http://localhost:8080 | grep -o '<title>.*</title>'
+<title>Welcome to nginx!</title>
+```
+
+**Experimento B · Borrar el servidor**
+
+```text
+$ docker rm -f web-g3
+web-g3
+
+$ terraform plan -refresh-only
+Note: Objects have changed outside of Terraform
+
+Terraform detected the following changes made outside of Terraform since the
+last "terraform apply" which may have affected this plan:
+
+  # docker_container.web has been deleted
+  - resource "docker_container" "web" { ... }
+
+This is a refresh-only plan, so Terraform will not take any actions to undo
+these.
+
+$ terraform plan
+  # docker_container.web will be created
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+Revisor: **«Aprobado: 1 a crear, 0 a cambiar, 0 a destruir».**
+
+```text
+$ terraform apply
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+$ curl -s http://localhost:8080 | grep -o '<title>.*</title>'
+<title>Welcome to nginx!</title>
+```
+
+**Experimento C · Cambiar el contenido por dentro**
+
+```text
+$ docker exec web-g3 sh -c "echo '<h1>Cambio manual</h1>' > /usr/share/nginx/html/index.html"
+$ curl -s http://localhost:8080
+<h1>Cambio manual</h1>
+
+$ terraform plan
+No changes. Your infrastructure matches the configuration.
+
+$ terraform apply -replace=docker_container.web
+  # docker_container.web will be replaced, as requested
+-/+ destroy and then create replacement
+Plan: 1 to add, 0 to change, 1 to destroy.
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+
+$ curl -s http://localhost:8080 | grep -o '<title>.*</title>'
+<title>Welcome to nginx!</title>
+
+$ terraform plan
+No changes. Your infrastructure matches the configuration.
+```
+
+**Tabla de drift**
+
+| Experimento | ¿El plan lo detectó? | ¿Qué propuso Terraform? | ¿Cómo quedó corregido? |
+|---|---|---|---|
+| A · Apagar | Sí (`must_run` false → true y puertos ausentes) | Reemplazar el contenedor (`-/+`): 1 a crear, 1 a destruir | `terraform apply`: contenedor nuevo y la página responde |
+| B · Borrar | Sí (`-refresh-only` informa «has been deleted») | Crear de nuevo el contenedor (`+`): 1 a crear | `terraform apply`: contenedor recreado y la página responde |
+| C · Cambiar por dentro | No («No changes») | Nada | `terraform apply -replace=docker_container.web`: contenedor nuevo con el contenido original |
 
 ### Respuestas
 
-_Pendiente._
+1. **¿Por qué no detectó el experimento C?** Terraform solo compara los atributos del recurso que guarda en el state (imagen, nombre, puertos, estado de ejecución…). El archivo `index.html` dentro del contenedor no es un atributo del recurso, así que para Terraform el contenedor sigue igual. Ese nivel, lo que hay *dentro* de la máquina, le corresponde a las herramientas de **gestión de configuración** (Ansible, Chef, Puppet) de la diapositiva «Aprovisionar ≠ configurar»; Terraform es de aprovisionamiento.
+2. **¿Por qué `-replace` es coherente con la infraestructura inmutable?** Porque no se entra a «arreglar» el contenedor a mano (mutable), sino que se descarta y se crea uno nuevo desde la definición del código. El resultado es idéntico a lo descrito y no arrastra cambios ocultos.
+3. **Detectar drift en un equipo real.** Programando un `terraform plan` (o `plan -refresh-only` con `-detailed-exitcode`) periódico en el pipeline CI/CD, por ejemplo cada noche, que avise al equipo cuando encuentre diferencias. Además, quitando permisos de cambio manual en producción para que todo pase por el código.
 
 ---
 
