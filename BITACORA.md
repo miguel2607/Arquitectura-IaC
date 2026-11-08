@@ -552,11 +552,170 @@ address in each module which requires that provider.
 
 ### Evidencias
 
-_Pendiente._
+La contraseña del backend se reemplaza por `****` en toda esta bitácora: nunca se escribe en el repositorio.
+
+**Parte A · State remoto con bloqueo**
+
+```text
+$ docker run -d --name tf-state-g3 -e POSTGRES_USER=terraform -e POSTGRES_PASSWORD=**** -e POSTGRES_DB=terraform_backend -p 5433:5432 postgres:17-alpine
+b492a644feea9f37731ff50a0d649d1cd56a6b4fd6ee784ae9171c242550d55c
+
+$ export PG_CONN_STR="postgres://terraform:****@localhost:5433/terraform_backend?sslmode=disable"
+```
+
+En `main.tf`, dentro del bloque `terraform`: `backend "pg" {}`.
+
+```text
+$ terraform init -migrate-state
+  Do you want to copy existing state to the new backend? ... Enter "yes" to copy
+  Enter a value: yes
+Successfully configured the backend "pg"! Terraform will automatically
+use this backend unless the backend configuration changes.
+Terraform has been successfully initialized!
+
+$ terraform state list
+data.docker_network.bridge
+module.blog.docker_container.this
+module.blog.docker_image.this
+module.docs.docker_container.this
+module.docs.docker_image.this
+module.tienda.docker_container.this
+module.tienda.docker_image.this
+
+$ docker exec tf-state-g3 psql -U terraform -d terraform_backend -c "SELECT id, name FROM terraform_remote_state.states;"
+ id |  name
+----+---------
+  1 | default
+(1 row)
+```
+
+Prueba de bloqueo. Terminal 1: `terraform apply` quedó esperando en «Do you want to perform these actions?» (sin responder). Terminal 2:
+
+```text
+$ terraform plan
+Error: Error acquiring the state lock
+
+Error message: Workspace is already locked: default
+Lock Info:
+  ID:        eeca77b8-f7b4-9bdf-569e-2d73f553d551
+  Operation: OperationTypePlan
+  Who:       LAPTOP-IDV8ALI0\MIGUEL@LAPTOP-IDV8ALI0
+  Version:   1.17.1
+  Created:   2026-11-08 19:43:34.3732938 +0000 UTC
+
+Terraform acquires a state lock to protect the state from being written
+by multiple users at the same time.
+```
+
+Terminal 1, al responder `no`: `Apply cancelled.`
+
+**Parte B · Un mismo código, tres ambientes**
+
+```text
+$ terraform destroy        (workspace default)
+Plan: 0 to add, 0 to change, 6 to destroy.
+Destroy complete! Resources: 6 destroyed.
+```
+
+Revisor: **«Aprobado: 0 a crear, 0 a cambiar, 6 a destruir; es el workspace default, que queda vacío».**
+
+TODO resueltos:
+
+- **TODO 1:** atributo `imagen` en cada ambiente de `locals.tf` (dev y staging `nginx:1.28-alpine`; prod `nginx:1.27-alpine`).
+- **TODO 2:** `imagen = local.amb.imagen` en `module "sitio"`.
+- **TODO 3:** output `urls` como map `nombre => url`: `{ for k, m in module.sitio : m.nombre => m.url }`.
+
+Plan en el workspace `default` (falla a propósito):
+
+```text
+$ terraform plan
+Error: Invalid index
+  on locals.tf line 11, in locals:
+  11:   amb = local.ambientes[local.entorno]
+    │ local.ambientes is object with 3 attributes
+    │ local.entorno is "default"
+The given key does not identify an element in this collection value.
+```
+
+```text
+$ terraform init
+- sitio in modules\sitio_web
+
+$ terraform workspace new dev
+Created and switched to workspace "dev"!
+$ terraform apply          Revisor: «Workspace dev, 1 sitio: 2 a crear»
+Plan: 2 to add, 0 to change, 0 to destroy.
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+urls = {
+  "tienda-g3-dev" = "http://localhost:8101"
+}
+
+$ terraform workspace new staging
+$ terraform apply          Revisor: «Workspace staging, 3 sitios: 6 a crear»
+Plan: 6 to add, 0 to change, 0 to destroy.
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+urls = {
+  "blog-g3-staging" = "http://localhost:8202"
+  "docs-g3-staging" = "http://localhost:8203"
+  "tienda-g3-staging" = "http://localhost:8201"
+}
+
+$ terraform workspace new prod
+$ terraform apply          Revisor: «Workspace prod, 3 sitios: 6 a crear»
+Plan: 6 to add, 0 to change, 0 to destroy.
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+urls = {
+  "blog-g3-prod" = "http://localhost:8302"
+  "docs-g3-prod" = "http://localhost:8303"
+  "tienda-g3-prod" = "http://localhost:8301"
+}
+
+$ terraform workspace list
+  default
+  dev
+* prod
+  staging
+```
+
+```text
+$ curl -s localhost:8101 | head -1  →  <h1>Tienda - DEV - grupo 3</h1>
+$ curl -s localhost:8201 | head -1  →  <h1>Tienda - STAGING - grupo 3</h1>
+$ curl -s localhost:8301 | head -1  →  <h1>Tienda - PROD - grupo 3</h1>
+
+$ docker exec tf-state-g3 psql -U terraform -d terraform_backend -c "SELECT id, name FROM terraform_remote_state.states;"
+ id |  name
+----+---------
+  1 | default
+  4 | dev
+  6 | staging
+  8 | prod
+(4 rows)
+
+$ docker ps --filter name=-g3
+NAMES               IMAGE                PORTS
+blog-g3-prod        6769dc3a703c         0.0.0.0:8302->80/tcp
+docs-g3-prod        6769dc3a703c         0.0.0.0:8303->80/tcp
+tienda-g3-prod      6769dc3a703c         0.0.0.0:8301->80/tcp
+docs-g3-staging     dc73b49f5124         0.0.0.0:8203->80/tcp
+tienda-g3-staging   dc73b49f5124         0.0.0.0:8201->80/tcp
+blog-g3-staging     dc73b49f5124         0.0.0.0:8202->80/tcp
+tienda-g3-dev       dc73b49f5124         0.0.0.0:8101->80/tcp
+tf-state-g3         postgres:17-alpine   0.0.0.0:5433->5432/tcp
+
+$ git grep <contraseña-del-backend>
+(sin resultados)
+```
+
+(`6769dc3a703c` es `nginx:1.27-alpine` y `dc73b49f5124` es `nginx:1.28-alpine`.)
 
 ### Respuestas
 
-_Pendiente._
+1. **Respuesta de la terminal 2.** `Error acquiring the state lock … Workspace is already locked: default`, con el ID del bloqueo, quién lo tiene y desde cuándo. Evita que dos personas apliquen cambios al mismo tiempo sobre el mismo state, lo que podría corromperlo o hacer que uno pise los cambios del otro.
+2. **¿Dónde quedó la contraseña?** Solo en la variable de entorno `PG_CONN_STR` de la terminal (y en la configuración del contenedor del backend). No debe ir en `main.tf` porque ese archivo se versiona: quedaría en el historial de Git para siempre y la vería cualquiera con acceso al repositorio (anti-patrón «secretos en el código»).
+3. **Filas de la tabla `states`.** `default`, `dev`, `staging` y `prod`: una fila por workspace. Cada workspace guarda su propio state independiente en el mismo backend.
+4. **Error en `default`.** `Invalid index`: `local.ambientes` no tiene la clave `"default"`. Es útil porque impide desplegar por accidente en un ambiente sin nombre: obliga a elegir de forma explícita `dev`, `staging` o `prod`.
+5. **dev con un sitio, staging igual a prod, imagen distinta.** Dev solo necesita lo mínimo para probar sin miedo y barato; staging es una réplica de producción para validar antes de lanzar, así que debe tener los mismos sitios. Prod se queda en `nginx:1.27-alpine` (la versión ya validada) hasta que staging confirme que la 1.28 funciona; así un cambio nuevo nunca llega primero a los clientes.
+6. **Riesgo de compartir código y backend.** Un error de código o un `apply` hecho en el workspace equivocado afecta directamente a producción, porque nada separa físicamente los ambientes; también comparten permisos y credenciales del backend. Con carpetas separadas (cada una con su state y su configuración) el aislamiento es mayor y se pueden aplicar cambios y permisos distintos por ambiente, a costa de repetir algo de código.
 
 ---
 
