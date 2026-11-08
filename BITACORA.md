@@ -396,11 +396,80 @@ No changes. Your infrastructure matches the configuration.
 
 ### Evidencias
 
-_Pendiente._
+Código separado en `main.tf`, `variables.tf`, `locals.tf`, `data.tf`, `outputs.tf` y `terraform.tfvars`. TODO resueltos:
+
+- **TODO 1:** variable `mensaje` (string, sin default) en `variables.tf`.
+- **TODO 2:** local `etiquetas` = `{ curso = "arquitectura-sw-2", grupo = tostring(var.grupo) }`.
+- **TODO 3 (reto):** bloque `dynamic "labels"` que recorre `local.etiquetas`.
+- **TODO 4 y 5:** outputs `contenedor` y `red_driver`.
+
+```text
+$ terraform plan
+  # docker_container.web must be replaced
+      + labels { # forces replacement
+      + labels { # forces replacement
+      + upload { # forces replacement
+Plan: 1 to add, 0 to change, 1 to destroy.
+```
+
+Revisor: **«Aprobado: 1 a crear, 0 a cambiar, 1 a destruir. El contenedor se reemplaza porque agregamos `upload` (el nuevo index.html) y `labels`, y esos atributos no se pueden cambiar en un contenedor que ya existe».**
+
+```text
+$ terraform apply
+Apply complete! Resources: 1 added, 0 changed, 1 destroyed.
+
+$ curl -s http://localhost:8080
+<h1>Hola desde el grupo 3</h1>
+<p>Desplegado con Terraform por el grupo 3</p>
+
+$ terraform output
+contenedor = "web-g3"
+red_driver = "bridge"
+url = "http://localhost:8080"
+```
+
+```text
+$ terraform console
+> local.nombre
+"web-g3"
+> upper(var.mensaje)
+"HOLA DESDE EL GRUPO 3"
+> format("web-g%02d", var.grupo)
+"web-g03"
+> local.etiquetas
+{
+  "curso" = "arquitectura-sw-2"
+  "grupo" = "3"
+}
+> data.docker_network.bridge.driver
+"bridge"
+> exit
+```
+
+```text
+$ terraform plan -var="puerto=9500"
+Error: Invalid value for variable
+
+  on variables.tf line 6:
+   6: variable "puerto" {
+    │ var.puerto is 9500
+
+El puerto debe estar entre 8000 y 8999.
+
+$ terraform plan -var="puerto=8085"
+          ~ external = 8080 -> 8085 # forces replacement
+Plan: 1 to add, 0 to change, 1 to destroy.
+  ~ url        = "http://localhost:8080" -> "http://localhost:8085"
+```
+
+(Solo se planeó; no se aplicó.)
 
 ### Respuestas
 
-_Pendiente._
+1. **¿Qué valor gana?** El de mayor precedencia: `-var` en la línea de comandos gana sobre `terraform.tfvars`, y este gana sobre el `default` de la variable. Con `-var="puerto=8085"` el plan usó 8085.
+2. **¿Qué hizo `validation` con 9500?** Detuvo el plan antes de llamar a Docker, con nuestro mensaje de error. Es Policy as Code en pequeño: una regla escrita en código («puertos solo entre 8000 y 8999») que la máquina hace cumplir automáticamente antes de aplicar.
+3. **¿Terraform creó la red `bridge`?** No. Es un *data source*: solo la lee (por eso aparece «Reading…» y no «Creating…»). Al ejecutar `destroy` no le pasa nada, porque no está entre los recursos que Terraform gestiona.
+4. **¿Qué ganamos con `local.nombre`?** El nombre se define en un solo lugar y se calcula a partir de `var.grupo`. Si cambia el grupo o el formato del nombre, se cambia una vez y todos los usos quedan coherentes; además, el mismo código sirve para cualquier grupo.
 
 ---
 
