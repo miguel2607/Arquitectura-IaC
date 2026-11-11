@@ -855,8 +855,56 @@ Se detuvo en el **último paso** (checkov, CKV_AWS_53) y no imprimió el mensaje
 
 ### Evidencias
 
-_Pendiente._
+**Parte A · Auditoría**
+
+Auditamos el repositorio del Grupo 1: https://github.com/ddeelena/iac-taller-gN. El resultado completo está en `AUDITORIA.md`.
+
+```text
+$ git log --all --name-only | grep tfstate
+(sin resultados)
+
+$ grep -rn --include='*.tf' docker_container infra/
+infra/modules/sitio_web/main.tf:11:resource "docker_container" "this" {
+infra/modules/sitio_web/outputs.tf:6:  value = docker_container.this.name
+
+$ git log -p -S "<contraseña del backend>" --oneline
+c31d20e fase-7: state remoto en postgres y tres ambientes   (aparece en BITACORA.md:269)
+
+$ ls infra infra/modules/sitio_web
+infra: data.tf  locals.tf  main.tf  modules  outputs.tf  terraform.tfvars  variables.tf
+infra/modules/sitio_web: main.tf  outputs.tf  tests  variables.tf  versions.tf
+```
+
+Resultado: cumplen 4 de 6 (tocar a mano, state, copiar y pegar, archivo gigante); no cumplen «Secretos en el código» (parcial) ni «Aplicar sin leer el plan».
+
+**Parte B · Cierre**
+
+Plan de destrucción de cada ambiente (`terraform plan -destroy`), leído por el revisor antes de aprobar:
+
+```text
+$ terraform workspace select dev && terraform plan -destroy
+  # module.sitio["tienda"].docker_container.this will be destroyed
+  # module.sitio["tienda"].docker_image.this will be destroyed
+Plan: 0 to add, 0 to change, 2 to destroy.
+
+$ terraform workspace select staging && terraform plan -destroy
+  # module.sitio["blog"].docker_container.this will be destroyed
+  # module.sitio["blog"].docker_image.this will be destroyed
+  # module.sitio["docs"].docker_container.this will be destroyed
+  # module.sitio["docs"].docker_image.this will be destroyed
+  # module.sitio["tienda"].docker_container.this will be destroyed
+  # module.sitio["tienda"].docker_image.this will be destroyed
+Plan: 0 to add, 0 to change, 6 to destroy.
+
+$ terraform workspace select prod && terraform plan -destroy
+  (los mismos 6 recursos de blog, docs y tienda)
+Plan: 0 to add, 0 to change, 6 to destroy.
+```
+
+Revisor: **«Aprobado: 0 a crear, 0 a cambiar, 2 a destruir en dev; 6 a destruir en staging; 6 a destruir en prod. Solo se van los sitios del grupo; el backend no está en el state».**
 
 ### Respuestas
 
-_Pendiente._
+1. **Anti-patrones.** En el Grupo 1 encontramos dos: «Secretos en el código», porque el texto literal de la contraseña del backend quedó en su `BITACORA.md:269` (y por tanto en el historial, commit `c31d20e`), y «Aplicar sin leer el plan», porque solo la Fase 6 tiene escrita la aprobación del revisor con su línea `Plan:`. A nosotros nos señalaron: ____________________.
+2. **Borrar el backend antes de los `destroy`.** El state de `dev`, `staging` y `prod` vive en la tabla `states` de PostgreSQL dentro de `tf-state-g3`. Si se elimina ese contenedor primero, Terraform pierde el registro de lo que creó: `init` y `destroy` ya no pueden conectarse al backend, y los siete contenedores quedarían huérfanos, existiendo en Docker sin que ningún código los administre. Habría que borrarlos a mano, que es justo el ClickOps que queremos evitar (y en la nube seguirían generando costo).
+3. **Disciplina en `destroy`.** Un `destroy` también cambia la infraestructura real y no tiene vuelta atrás: lo que se borra (por ejemplo, una base de datos con sus datos) no vuelve con otro `apply`. Además, depende del workspace activo: en el workspace equivocado se destruye `prod` en vez de `dev`. Por eso el revisor lee el plan de destrucción, confirma el workspace y cuántos recursos se van, igual que antes de un `apply`.
