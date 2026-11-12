@@ -903,8 +903,52 @@ Plan: 0 to add, 0 to change, 6 to destroy.
 
 Revisor: **«Aprobado: 0 a crear, 0 a cambiar, 2 a destruir en dev; 6 a destruir en staging; 6 a destruir en prod. Solo se van los sitios del grupo; el backend no está en el state».**
 
+Destrucción de cada ambiente, en orden `dev`, `staging`, `prod`:
+
+```text
+$ terraform workspace select dev && terraform destroy
+Plan: 0 to add, 0 to change, 2 to destroy.
+module.sitio["tienda"].docker_container.this: Destruction complete after 0s
+module.sitio["tienda"].docker_image.this: Destruction complete after 0s
+Destroy complete! Resources: 2 destroyed.
+
+$ terraform workspace select staging && terraform destroy
+Plan: 0 to add, 0 to change, 6 to destroy.
+module.sitio["tienda"].docker_container.this: Destruction complete after 0s
+module.sitio["tienda"].docker_image.this: Destruction complete after 0s
+module.sitio["docs"].docker_container.this: Destruction complete after 0s
+module.sitio["docs"].docker_image.this: Destruction complete after 0s
+module.sitio["blog"].docker_container.this: Destruction complete after 0s
+module.sitio["blog"].docker_image.this: Destruction complete after 0s
+Destroy complete! Resources: 6 destroyed.
+
+$ terraform workspace select prod && terraform destroy
+Plan: 0 to add, 0 to change, 6 to destroy.
+module.sitio["tienda"].docker_container.this: Destruction complete after 0s
+module.sitio["tienda"].docker_image.this: Destruction complete after 0s
+module.sitio["docs"].docker_container.this: Destruction complete after 0s
+module.sitio["docs"].docker_image.this: Destruction complete after 0s
+module.sitio["blog"].docker_container.this: Destruction complete after 0s
+module.sitio["blog"].docker_image.this: Destruction complete after 0s
+Destroy complete! Resources: 6 destroyed.
+```
+
+Solo queda el backend; se elimina al final:
+
+```text
+$ docker ps -a --filter "name=-g3"
+NAMES         IMAGE                STATUS
+tf-state-g3   postgres:17-alpine   Up 46 seconds
+
+$ docker rm -f tf-state-g3
+tf-state-g3
+
+$ docker ps -a --filter "name=-g3"
+NAMES     IMAGE     STATUS
+```
+
 ### Respuestas
 
-1. **Anti-patrones.** En el Grupo 1 encontramos dos: «Secretos en el código», porque el texto literal de la contraseña del backend quedó en su `BITACORA.md:269` (y por tanto en el historial, commit `c31d20e`), y «Aplicar sin leer el plan», porque solo la Fase 6 tiene escrita la aprobación del revisor con su línea `Plan:`. A nosotros nos señalaron: ____________________.
+1. **Anti-patrones.** En el Grupo 1 encontramos dos: «Secretos en el código», porque el texto literal de la contraseña del backend quedó en su `BITACORA.md:269` (y por tanto en el historial, commit `c31d20e`), y «Aplicar sin leer el plan», porque solo la Fase 6 tiene escrita la aprobación del revisor con su línea `Plan:`. A nosotros el Grupo 1 nos dio «Cumple» en los seis anti-patrones, con una excepción en «Aplicar sin leer el plan»: el `terraform apply -replace` del Experimento C (Fase 4) no tiene escrita la aprobación del revisor. Además nos señalaron que todos los commits salieron de una sola cuenta de Git, por lo que el historial no refleja la rotación de roles (trabajamos desde un solo computador; la rotación quedó registrada en la tabla de esta bitácora); que la Fase 9 no tenía las salidas del `destroy` ni la eliminación del backend (agregadas arriba); que la variable `imagen` de `infra/variables.tf` quedó sin uso desde la Fase 7 (ya la eliminamos), y que en la prueba de bloqueo la información dice `OperationTypePlan` aunque la terminal 1 tenía un `apply`.
 2. **Borrar el backend antes de los `destroy`.** El state de `dev`, `staging` y `prod` vive en la tabla `states` de PostgreSQL dentro de `tf-state-g3`. Si se elimina ese contenedor primero, Terraform pierde el registro de lo que creó: `init` y `destroy` ya no pueden conectarse al backend, y los siete contenedores quedarían huérfanos, existiendo en Docker sin que ningún código los administre. Habría que borrarlos a mano, que es justo el ClickOps que queremos evitar (y en la nube seguirían generando costo).
 3. **Disciplina en `destroy`.** Un `destroy` también cambia la infraestructura real y no tiene vuelta atrás: lo que se borra (por ejemplo, una base de datos con sus datos) no vuelve con otro `apply`. Además, depende del workspace activo: en el workspace equivocado se destruye `prod` en vez de `dev`. Por eso el revisor lee el plan de destrucción, confirma el workspace y cuántos recursos se van, igual que antes de un `apply`.
